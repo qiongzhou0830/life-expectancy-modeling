@@ -27,8 +27,7 @@ The analysis focuses on factors such as food insecurity, adult smoking, physical
 
 * `code/life_expectancy_analysis.Rmd`: Reproducible R Markdown analysis file
 * `report/life_expectancy_report.pdf`: Final project report
-* `figures/`: Main plots and diagnostic figures
-* `data/README.md`: Notes about dataset availability
+* `data/README.md`: Not avaible due to course restriction
 
 ## Tools
 
