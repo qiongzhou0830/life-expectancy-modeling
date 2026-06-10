@@ -1,0 +1,239 @@
+---
+title: 'Regression Analysis of County-Level Life Expectancy in the United States'
+#date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Abstract
+
+This project analyzes county-level life expectancy in the United States using multiple regression methods. We first split the data into training and test sets using group seed 28, then conducted exploratory data analysis to examine the distribution of life expectancy and its relationships with health, socioeconomic, environmental, and state-level predictors. The EDA showed that life expectancy is strongly negatively associated with food insecurity, adult smoking, physical inactivity, and diabetes prevalence, while median income has a strong positive relationship. We first fit a full numerical multiple linear regression model, then created a reduced model by removing insignificant predictors. Diagnostics suggested that the reduced model was mostly reasonable, although mild heteroscedasticity and moderate multicollinearity remained. Because state-level averages showed meaningful differences, we also fit an ANCOVA model including state as a categorical predictor. Model comparison using F-tests and test-set MSE showed that the ANCOVA model with state performed best. Therefore, we selected this model as the final model and concluded that both county-level health conditions and state-level differences are important for explaining life expectancy.
+
+
+## Exploratory Data Analysis
+
+For initial setup: 
+```{r}
+group_seed <- 28
+```
+
+```{r eda1, echo = FALSE, include = FALSE}
+dat <- read.csv("~/Downloads/final_project_data.csv")
+dat$state <- factor(dat$state)
+```
+
+Now, we do a train-test split of the data using our group seed (28). 
+```{r}
+set.seed(group_seed)
+n <- nrow(dat)
+train_id <- sample(seq_len(n), size = round(0.8 * n))
+train_dat <- dat[train_id, ] 
+test_dat  <- dat[-train_id, ]
+```
+
+We first use a histogram to examine the overall distribution of life expectancy in the training data.
+```{r, fig.width=5, fig.height=3}
+hist(train_dat$life_expectancy,
+     main = "Distribution of Life Expectancy",
+     xlab = "Life Expectancy")
+```
+                                           
+The histogram shows that life expectancy in the training data is roughly unimodal, with most counties between about 72 and 80 years and a center around 75 to 77 years. The histogram is slight left skewness. A few counties have unusually low or high life expectancy, so we will examine outliers more carefully in the diagnostics section.
+
+\bigskip
+We then use a correlation analysis to examine the marginal relationships between life expectancy and the numerical predictors.
+```{r}
+num_vars <- train_dat[sapply(train_dat, is.numeric)]
+
+cor_with_y <- cor(num_vars, use = "complete.obs")[, "life_expectancy"]
+sort(cor_with_y)
+
+cor_with_y <- sort(cor_with_y[names(cor_with_y) != "life_expectancy"])
+```
+The correlations suggest that several health-related predictors are strongly related to life expectancy. Food insecurity, adult smoking, physical inactivity, and diabetes prevalence have the strongest negative correlations, around -0.72 to -0.77. In contrast, homeownership, gender pay gap, and PM2.5 show weaker marginal relationships. Overall, behavioral and health-related variables appear especially important for the initial regression model.
+\bigskip
+
+We then use VIF analysis to check for multicollinearity among the predictors.
+```{r}
+library(car)
+
+modvif <- lm(life_expectancy ~ ., data = train_dat)
+vif(modvif)
+```
+The VIF results suggest moderate multicollinearity, especially among health-related predictors such as physical inactivity, diabetes prevalence, food insecurity, and adult smoking. These variables likely measure related county-level health conditions. This motivates considering a reduced model in the model comparison section.
+\bigskip
+
+We then pick the four predictors with the strongest negative correlation coefficients with life expectancy: food insecurity, adult smoking, physical inactivity, and diabetes prevalence. We use scatterplots with lowess lines to examine whether the relationships between these predictors and life expectancy are linear. 
+```{r eda-plots, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=4.8}
+par(mfrow = c(2, 2))
+
+plot(train_dat$food_insecurity, train_dat$life_expectancy,
+     xlab = "Food Insecurity",
+     ylab = "Life Expectancy",
+     main = "Life Expectancy vs Food Insecurity")
+lines(lowess(train_dat$food_insecurity, train_dat$life_expectancy),
+      col = "red", lwd = 2)
+
+plot(train_dat$adult_smoking, train_dat$life_expectancy,
+     xlab = "Adult Smoking",
+     ylab = "Life Expectancy",
+     main = "Life Expectancy vs Adult Smoking")
+lines(lowess(train_dat$adult_smoking, train_dat$life_expectancy),
+      col = "red", lwd = 2)
+
+plot(train_dat$physical_inactivity, train_dat$life_expectancy,
+     xlab = "Physical Inactivity",
+     ylab = "Life Expectancy",
+     main = "Life Expectancy vs Physical Inactivity")
+lines(lowess(train_dat$physical_inactivity, train_dat$life_expectancy),
+      col = "red", lwd = 2)
+
+plot(train_dat$diabetes_prevalence, train_dat$life_expectancy,
+     xlab = "Diabetes Prevalence",
+     ylab = "Life Expectancy",
+     main = "Life Expectancy vs Diabetes Prevalence")
+lines(lowess(train_dat$diabetes_prevalence, train_dat$life_expectancy),
+      col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+```
+     
+The plots show clear downward trends, meaning counties with higher values of these health risk factors tend to have lower life expectancy. Since the lowess lines are mostly smooth and close to linear, linear regression seems like a reasonable starting point for modeling the training dataset.
+\bigskip
+
+We then use state-level average plots to examine whether life expectancy differs across states.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+state_mean <- aggregate(life_expectancy ~ state, data = train_dat, mean)
+state_mean <- state_mean[order(state_mean$life_expectancy), ]
+head(state_mean)
+tail(state_mean)
+```
+The results show a meaningful gap of about 10 years between the lowest- and highest-average states, suggesting that state may capture important regional differences and should be considered as a categorical predictor.
+
+**Decision Note.**  
+Decision Note.
+The EDA suggests that several behavioral and health-related predictors, especially food insecurity, adult smoking, physical inactivity, and diabetes prevalence, have strong negative marginal relationships with life expectancy. The scatterplots show mostly linear downward trends, so multiple linear regression is a reasonable starting point. At the same time, the VIF results suggest moderate multicollinearity among some health-related predictors, motivating a reduced model for comparison. State-level averages also vary meaningfully, suggesting that state may capture important regional differences. Therefore, we start with a multiple linear regression model using numerical predictors and later compare it with a reduced model and an ANCOVA model including state.
+# Model Building and Diagnostics
+
+## A simple model
+We first fit a multiple linear regression model using all numerical predictors.
+```{r}
+model_full <- lm(life_expectancy ~ .- state, data = train_dat)
+summary(model_full)
+```
+\bigskip
+The reduced model obtained by removing the insignificant predictors (gender pay gap, adult obesity, pm2.5, and homeownership) was compared to the larger model.
+```{r, echo=TRUE, tidy=TRUE}
+mod2 <- lm(life_expectancy ~ .- state - gender_pay_gap - adult_obesity - pm25 - homeownership, data = train_dat)
+anova(mod2, model_full)
+```
+The ANOVA results show that the reduction does not significantly worsen model fit (F = 1.34, p = 0.254). Therefore, the simpler model is preferred for its improved interpretability without a significant loss of explanatory power.
+
+
+
+## Diagnostics
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=4}
+par(mfrow = c(2,2))
+plot(mod2)
+
+```
+          
+The diagnostic plots suggest that the model assumptions are largely reasonable. The residuals vs fitted plot shows no strong pattern, indicating approximate linearity, though there is slight heteroscedasticity. The Q-Q plot is close to a straight line with minor deviations at the tails, suggesting approximate normality. The scale-location plot shows a mild decrease in variance, indicating slight non-constant variance. The residuals vs leverage plot does not reveal any highly influential observations. Overall, no severe violations are observed.
+
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+cooksd <- cooks.distance(mod2)
+which(cooksd > 1)
+```
+NO observations have Cook’s distance > 1. This indicates that no individual observation exerts a strong influence on the model, and therefore no observations were removed.
+
+
+```{r}
+library(car)
+vif(mod2)
+```
+Although moderate multicollinearity remains among some health-related predictors, it is not severe enough to warrant further remedies. Since our goal is primarily prediction and interpretation remains reasonable, we proceed with the reduced model while acknowledging this limitation.
+
+
+# Model Comparison
+
+## An alternative model
+
+# 1st alternative model
+
+For the first alternative model, we started from the full model including state and all numerical predictors, then used backward selection with BIC. BIC balances model fit and model complexity, and it penalizes large models more strongly than AIC.
+
+```{r, tidy=TRUE}
+model_state_full <- lm(life_expectancy ~ . , data = train_dat)
+model_state_bic <- step(model_state_full, direction = "backward", k = log(nrow(train_dat)), trace = 0)
+summary(model_state_bic)
+```
+
+The final BIC-selected model kept median income, income inequality, disconnected youth, adult smoking, physical inactivity, diabetes prevalence, food insecurity, insufficient sleep, and severe housing cost burden.
+
+Although the EDA showed noticeable state-level differences in average life expectancy, BIC-based selection removed `state` from the model. I think this is reasonable because `state` is a categorical variable with many levels, so including it adds many extra parameters. After controlling for selected numerical predictors such as median income, adult smoking, diabetes prevalence, and food insecurity, the improvement by adding state did not appear large enough to justify the additional model complexity under BIC.
+
+# 2nd alternative model
+We simply implemented the alternative model - An ANCOVA model with `state` included - as hinted.
+```{r, tidy=TRUE}
+mod_state <- lm(life_expectancy ~ . - gender_pay_gap - adult_obesity - pm25 - homeownership, data = train_dat)
+summary(mod_state)
+```
+
+## Comparing two models
+
+# 1st alternative model <-> mod2
+After building the additional candidate model `model_state_bic`, we compare it with the reduced model `mod2` fitted in the previous section. The two models are nested because all predictors in `model_state_bic` are also included in `mod2`. The larger model `mod2` additionally includes `unemployment` and `primary_care_physicians`. Therefore, we can use a model comparison F-test.
+
+The null hypothesis is that the extra predictors in `mod2` doesn't improve the model after the predictors in `model_state_bic` are already included. The alternative hypothesis is that at least one of those extra predictors is useful.
+
+```{r}
+anova(model_state_bic, mod2)
+```
+p_value = 0.0179 < 0.05, we reject H0. at least one of the extra predictors in mod2 is useful.
+
+# 2nd alternative model <-> mod2
+We compare the reduced numerical model `mod2` with the ANCOVA model `mod_state`. The two models are nested because `mod_state` contains all predictors in `mod2` plus the categorical predictor `state`. Therefore, we use a model comparison F-test.
+
+The null hypothesis is that adding `state` does not significantly improve the model after adjusting for the selected numerical predictors. The alternative hypothesis is that state effects improve the model.
+
+```{r}
+anova(mod2, mod_state)
+```
+p-value < 2.2 $\times 10^{-16}$. We reject H0 , adding `states` improves the model.
+
+# Conclusion and Discussion
+
+**Final model**: 
+Based on the model comparison F-test in the previous section, we choose **mod_state** as our final model.
+This is an ANCOVA model with `state` included. We do not use interactions or nonlinear terms. The model includes the reduced set of numerical predictors from before, plus `state`. The numerical predictors are `median_income`, `unemployment`, `income_inequality`, `disconnected_youth`, `adult_smoking`, `physical_inactivity`, `diabetes_prevalence`, `food_insecurity`, `insufficient_sleep`, `primary_care_physicians`, and `severe_housing_cost_burden`.Many coefficient signs are reasonable, such as the negative coefficients for adult smoking, diabetes prevalence, food insecurity, and insufficient sleep. The role of `state` is mainly to adjust for state-level differences. So the model is not assuming all counties have the same baseline life expectancy across the country.
+
+**Prediction error on test data**: 
+
+When calculating the test MSE, we removed the one test observation with `state = "US"`, because this state level did not appear in the training data. The model with `state` cannot predict a new factor level. Then we used the same remaining test observations to calculate MSE for both models.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+test_dat_compare <- test_dat[test_dat$state != "US", ]
+
+pred_mod2 <- predict(mod2, newdata = test_dat_compare)
+pred_state <- predict(mod_state, newdata = test_dat_compare)
+
+mse_mod2 <- mean((test_dat_compare$life_expectancy - pred_mod2)^2)
+mse_state <- mean((test_dat_compare$life_expectancy - pred_state)^2)
+
+mse_mod2
+mse_state
+```
+The test MSE is 3.1514 for `mod2` and 2.2998 for `mod_state`. Since `mod_state` has a smaller MSE, it predicts better on the test data. This matches the F-test result from the model comparison section. Therefore, we choose `mod_state` as the final model.
+
+**Open questions and limitations**: 
+Although the final ANCOVA model with state has better test performance than the reduced numerical model, there are still several limitations. First, our model diagnostics were mainly based on visual diagnostic plots. To keep the report concise, we did not use formal diagnostic tests such as the Breusch-Pagan test (bptest) for heteroscedasticity or additional formal tests for normality. The residual plots suggested only mild non-constant variance, but a formal test could provide stronger evidence.
+
+Second, moderate multicollinearity still remains among some health-related predictors, such as adult smoking, physical inactivity, diabetes prevalence, and food insecurity. These variables may measure overlapping county-level health conditions, so individual coefficient interpretations should be made carefully. A possible next step would be to use ridge regression, lasso, or principal component regression to handle multicollinearity more systematically.
+
+Finally, this analysis is observational, so the model shows associations rather than causal relationships. For example, higher adult smoking or food insecurity is associated with lower life expectancy, but we cannot conclude direct causation from this regression alone. Future work could include additional variables, test interaction terms, use formal diagnostic tests, and compare more prediction methods to improve both interpretation and prediction accuracy. 
+
+
+
+
